@@ -4,47 +4,22 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
+import { renderAppShell, updateHud } from "./app-shell.js";
+import { parseGitHubSceneData } from "./profile-utils.js";
+import { cameraTrack } from "./scene-config.js";
+import {
+  clamp01,
+  pickGardenPosition,
+  randomRange,
+  sampleCameraTrack,
+  smoothPulse,
+  smoothRange,
+  wrapRange
+} from "./story-math.js";
 import "./style.css";
 
 const app = document.querySelector("#app");
-
-app.innerHTML = `
-  <main class="story-root" aria-label="Lakshmanan Palani Three.js portfolio story">
-    <canvas class="scene-canvas" aria-hidden="true"></canvas>
-    <div class="atmosphere"></div>
-    <div class="progress-track" aria-hidden="true">
-      <span class="progress-fill"></span>
-    </div>
-
-    <div class="scroll-hint">
-      <span class="scroll-hint-label">Scroll to walk the garden path</span>
-      <span class="scroll-hint-line" aria-hidden="true"></span>
-    </div>
-
-    <button class="sound-toggle" type="button" aria-pressed="true">Sound on</button>
-
-    <div class="intro-overlay">
-      <div class="intro-panel">
-        <p class="intro-eyebrow">Garden House Portfolio</p>
-        <h1 class="intro-title">Enter Lakshmanan Palani&apos;s house</h1>
-        <p class="intro-copy">
-          A slower home tour through the garden, entrance, staircase, dancing room, and terrace.
-        </p>
-        <p class="intro-status">Loading scene assets...</p>
-        <button class="enter-button" type="button" disabled>Loading 0%</button>
-      </div>
-    </div>
-  </main>
-  <div class="scroll-space" aria-hidden="true"></div>
-`;
-
-const canvas = document.querySelector(".scene-canvas");
-const progressFill = document.querySelector(".progress-fill");
-const scrollHint = document.querySelector(".scroll-hint");
-const soundToggle = document.querySelector(".sound-toggle");
-const introOverlay = document.querySelector(".intro-overlay");
-const introStatus = document.querySelector(".intro-status");
-const enterButton = document.querySelector(".enter-button");
+const { canvas, progressFill, scrollHint, soundToggle, introOverlay, introStatus, enterButton } = renderAppShell(app);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xb8d2ee);
@@ -110,24 +85,6 @@ createHouse(scene, renderer, materials, animatedWorld);
 createWindmill(scene, materials, animatedWorld);
 createClouds(scene, materials, animatedWorld, densityMultiplier);
 loadBirdAssets(scene, animatedWorld, gltfLoader);
-
-const cameraTrack = [
-  { at: 0.0, position: new THREE.Vector3(0, 7.2, 64), look: new THREE.Vector3(0, 4.1, 7) },
-  { at: 0.08, position: new THREE.Vector3(1.1, 6.7, 51), look: new THREE.Vector3(0, 4.0, 6.3) },
-  { at: 0.18, position: new THREE.Vector3(0.5, 5.8, 34), look: new THREE.Vector3(0, 3.6, 6.4) },
-  { at: 0.3, position: new THREE.Vector3(0, 4.1, 17), look: new THREE.Vector3(0, 3.1, 6.8) },
-  { at: 0.4, position: new THREE.Vector3(0, 2.9, 8.9), look: new THREE.Vector3(0, 2.5, 6.1) },
-  { at: 0.5, position: new THREE.Vector3(-5.85, 2.72, 2.3), look: new THREE.Vector3(-8.55, 3.0, 0.6) },
-  { at: 0.58, position: new THREE.Vector3(4.98, 2.64, -0.48), look: new THREE.Vector3(8.28, 2.68, -2.62) },
-  { at: 0.65, position: new THREE.Vector3(5.82, 2.56, 1.44), look: new THREE.Vector3(5.46, 2.42, -0.76) },
-  { at: 0.72, position: new THREE.Vector3(5.6, 3.54, -0.22), look: new THREE.Vector3(5.34, 3.78, -2.02) },
-  { at: 0.79, position: new THREE.Vector3(5.3, 4.82, -2.18), look: new THREE.Vector3(5.06, 5.02, -4.6) },
-  { at: 0.84, position: new THREE.Vector3(0.16, 6.02, 0.28), look: new THREE.Vector3(2.9, 5.96, 2.15) },
-  { at: 0.9, position: new THREE.Vector3(0.18, 6.03, 0.82), look: new THREE.Vector3(4.0, 5.94, 2.42) },
-  { at: 0.95, position: new THREE.Vector3(0.22, 6.04, 1.34), look: new THREE.Vector3(4.78, 5.92, 2.58) },
-  { at: 0.98, position: new THREE.Vector3(0.56, 6.34, 6.9), look: new THREE.Vector3(0.22, 6.12, 10.8) },
-  { at: 1.0, position: new THREE.Vector3(0, 7.22, 11.7), look: new THREE.Vector3(0, 4.6, 33.5) }
-];
 
 const state = {
   scrollTarget: 0,
@@ -232,7 +189,7 @@ soundToggle.addEventListener("click", async () => {
 
 updateScrollTarget();
 onResize();
-updateHud(0);
+updateHud(0, progressFill, scrollHint);
 
 const clock = new THREE.Clock();
 
@@ -241,7 +198,7 @@ renderer.setAnimationLoop(() => {
   const elapsed = clock.elapsedTime;
   state.scrollCurrent = THREE.MathUtils.damp(state.scrollCurrent, state.scrollTarget, 2.05, delta);
 
-  updateHud(state.scrollCurrent);
+  updateHud(state.scrollCurrent, progressFill, scrollHint);
   sampleCameraTrack(cameraTrack, state.scrollCurrent, sampledCameraPosition, sampledLookTarget);
   updateWorldAnimations(animatedWorld, elapsed, delta, state.scrollCurrent);
   ambientSound.update(state.scrollCurrent);
@@ -289,12 +246,6 @@ renderer.setAnimationLoop(() => {
 
   composer.render();
 });
-
-function updateHud(progress) {
-  progressFill.style.transform = `scaleX(${progress.toFixed(4)})`;
-  scrollHint.style.opacity = String(1 - smoothRange(progress, 0.05, 0.22));
-  scrollHint.style.transform = `translate(-50%, ${smoothRange(progress, 0, 0.18) * 12}px)`;
-}
 
 function createMaterials() {
   return {
@@ -1525,78 +1476,12 @@ function updateWorldAnimations(animated, elapsed, delta, progress) {
   });
 }
 
-function sampleCameraTrack(track, progress, outPosition, outLook) {
-  if (progress <= track[0].at) {
-    outPosition.copy(track[0].position);
-    outLook.copy(track[0].look);
-    return;
-  }
-
-  for (let index = 1; index < track.length; index += 1) {
-    const previous = track[index - 1];
-    const next = track[index];
-    if (progress <= next.at) {
-      const t = smoothstep(clamp01((progress - previous.at) / (next.at - previous.at)));
-      outPosition.lerpVectors(previous.position, next.position, t);
-      outLook.lerpVectors(previous.look, next.look, t);
-      return;
-    }
-  }
-
-  outPosition.copy(track[track.length - 1].position);
-  outLook.copy(track[track.length - 1].look);
-}
-
-function pickGardenPosition() {
-  let x = 0;
-  let z = 0;
-  let attempts = 0;
-
-  do {
-    x = randomRange(-34, 34);
-    z = randomRange(-24, 58);
-    attempts += 1;
-  } while (
-    attempts < 80 &&
-    ((Math.abs(x) < 5.3 && z > 6 && z < 58) ||
-      (Math.abs(x) < 11.6 && z > -9 && z < 12) ||
-      (x > 8 && x < 20 && z < -10 && z > -26))
-  );
-
-  return { x, z };
-}
-
 function createSeededRandom(seed) {
   let value = seed * 1009;
   return () => {
     value = (value * 9301 + 49297) % 233280;
     return value / 233280;
   };
-}
-
-function randomRange(min, max) {
-  return min + Math.random() * (max - min);
-}
-
-function clamp01(value) {
-  return THREE.MathUtils.clamp(value, 0, 1);
-}
-
-function smoothstep(value) {
-  return value * value * (3 - 2 * value);
-}
-
-function smoothRange(value, start, end) {
-  return smoothstep(clamp01((value - start) / (end - start)));
-}
-
-function smoothPulse(value, start, end, feather = 0.06) {
-  return smoothRange(value, start - feather, start) * (1 - smoothRange(value, end, end + feather));
-}
-
-function wrapRange(value, min, max) {
-  const size = max - min;
-  return ((((value - min) % size) + size) % size) + min;
 }
 
 function createCurtainPanel(position, width, height, direction = 1) {
@@ -1617,37 +1502,6 @@ function createCurtainPanel(position, width, height, direction = 1) {
   return curtain;
 }
 
-function buildFallbackProfileSceneData() {
-  return {
-    name: portfolioData.name,
-    headline: portfolioData.bio,
-    aboutItems: portfolioData.focus.slice(0, 4),
-    links: Object.entries(portfolioData.links).map(([label, url]) => ({
-      label: label === "devto" ? "Dev.to" : label[0].toUpperCase() + label.slice(1),
-      url
-    })),
-    stats: {
-      repos: portfolioData.stats.publicRepos,
-      followers: portfolioData.stats.followers,
-      following: portfolioData.stats.following,
-      topLanguage: portfolioData.stack[0]?.label ?? "JavaScript",
-      updatedAt: "Live on load"
-    },
-    topRepos: portfolioData.highlights.map((repo) => ({
-      name: repo.name,
-      language: repo.language,
-      stars: 0,
-      description: repo.description
-    })),
-    repoCards: [
-      { label: "Public repos", value: `${portfolioData.stats.publicRepos}` },
-      { label: "Followers", value: `${portfolioData.stats.followers}` },
-      { label: "Following", value: `${portfolioData.stats.following}` },
-      { label: "Top stack", value: portfolioData.stack[0]?.label ?? "JavaScript" }
-    ]
-  };
-}
-
 async function loadLiveGitHubSceneData() {
   const [readmeResponse, userResponse, reposResponse] = await Promise.all([
     fetch("https://raw.githubusercontent.com/Luxxgit2k4/Luxxgit2k4/main/README.md"),
@@ -1666,97 +1520,6 @@ async function loadLiveGitHubSceneData() {
   ]);
 
   return parseGitHubSceneData(readmeText, user, repos);
-}
-
-function parseGitHubSceneData(readmeText, user, repos) {
-  const lines = readmeText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const headingLine = lines.find((line) => /^#{1,6}\s/.test(line));
-  const nameMatch = headingLine?.match(/I'?m\s+(.+)/i);
-  const headline = lines.find(
-    (line) =>
-      !/^#{1,6}\s/.test(line) &&
-      !line.startsWith("- ") &&
-      !line.startsWith("<") &&
-      !/^Connect with me/i.test(line) &&
-      !/^###/.test(line)
-  );
-
-  const aboutItems = lines
-    .filter((line) => line.startsWith("- "))
-    .map((line) => stripMarkdown(line.slice(2)))
-    .slice(0, 5);
-
-  const links = extractReadmeLinks(readmeText).slice(0, 5);
-  const topRepos = [...repos]
-    .filter((repo) => !repo.fork)
-    .sort((left, right) => {
-      if (right.stargazers_count !== left.stargazers_count) {
-        return right.stargazers_count - left.stargazers_count;
-      }
-      return new Date(right.updated_at) - new Date(left.updated_at);
-    })
-    .slice(0, 5)
-    .map((repo) => ({
-      name: repo.name,
-      language: repo.language ?? "n/a",
-      stars: repo.stargazers_count,
-      description: repo.description ?? "No description yet"
-    }));
-
-  const languageSummary = Object.entries(
-    repos.reduce((accumulator, repo) => {
-      if (!repo.fork && repo.language) {
-        accumulator[repo.language] = (accumulator[repo.language] ?? 0) + 1;
-      }
-      return accumulator;
-    }, {})
-  ).sort((left, right) => right[1] - left[1]);
-
-  return {
-    name: nameMatch?.[1]?.trim() ?? user.name ?? portfolioData.name,
-    headline: stripMarkdown(headline ?? user.bio ?? portfolioData.bio),
-    aboutItems,
-    links,
-    stats: {
-      repos: user.public_repos,
-      followers: user.followers,
-      following: user.following,
-      topLanguage: languageSummary[0]?.[0] ?? "JavaScript",
-      updatedAt: formatDate(user.updated_at)
-    },
-    topRepos,
-    repoCards: [
-      { label: "Public repos", value: `${user.public_repos}` },
-      { label: "Followers", value: `${user.followers}` },
-      { label: "Following", value: `${user.following}` },
-      { label: "Top language", value: languageSummary[0]?.[0] ?? "JavaScript" }
-    ]
-  };
-}
-
-function extractReadmeLinks(readmeText) {
-  const links = [];
-  const matches = readmeText.matchAll(/<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g);
-
-  for (const match of matches) {
-    const [, url, innerHtml] = match;
-    const messageMatch = innerHtml.match(/message=([^&"]+)/i);
-    const altMatch = innerHtml.match(/alt="([^"]+)"/i);
-    const rawLabel = messageMatch?.[1]
-      ? decodeURIComponent(messageMatch[1].replace(/\+/g, " "))
-      : altMatch?.[1] ?? "Link";
-
-    links.push({
-      label: rawLabel.replace(/\s*logo$/i, ""),
-      url
-    });
-  }
-
-  return links;
 }
 
 function applyProfileSceneContent(currentRenderer, panels, sceneData) {
@@ -1947,27 +1710,6 @@ function drawRoomPanelBackground(context, width, height, startColor, endColor) {
   context.strokeStyle = "rgba(32, 42, 28, 0.18)";
   context.lineWidth = 10;
   context.strokeRect(14, 14, width - 28, height - 28);
-}
-
-function stripMarkdown(text) {
-  return text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[*_`>#]/g, "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function formatDate(value) {
-  if (!value) {
-    return "Recently updated";
-  }
-
-  return new Date(value).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric"
-  });
 }
 
 function loadBirdAssets(targetScene, animated, loader) {
