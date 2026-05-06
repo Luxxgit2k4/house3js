@@ -53,12 +53,12 @@ jobs:
         run: python3 -m pip install semgrep
 
       - name: Run Semgrep SAST scan
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         run: |
-          semgrep scan \
-            --config auto \
+          semgrep ci \
             --json \
-            --output semgrep-report.json \
-            . || true
+            --output semgrep-report.json || true
 
       - name: Install OPA
         run: |
