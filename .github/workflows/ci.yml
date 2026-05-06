@@ -9,10 +9,11 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   frontend-ci:
-    name: Frontend CI
+    name: Frontend CI + Security Reports
     runs-on: ubuntu-latest
 
     steps:
@@ -41,8 +42,38 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          format: json
+          output: trivy-fs-report.json
+          exit-code: 0
+
+      - name: Install Semgrep
+        run: python3 -m pip install semgrep
+
+      - name: Run Semgrep SAST scan
+        run: |
+          semgrep scan \
+            --config auto \
+            --json \
+            --output semgrep-report.json \
+            . || true
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: dist/
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-security-reports
+          path: |
+            trivy-fs-report.json
+            semgrep-report.json
