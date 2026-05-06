@@ -107,6 +107,13 @@ Current hook behavior:
 
 If a hook fails, fix the underlying issue rather than bypassing it. In practice, the pre-push hook can block a push if dependency vulnerabilities at `high` or above are present.
 
+Important behavior to remember:
+
+- `gitleaks detect --source . --redact --verbose` is intentionally using Gitleaks' default Git-aware scan mode. That means it checks the repository through Git data and can flag secrets from current or older commits, not just the file contents you changed right now.
+- If you ever want a filesystem-only scan of the current working tree, you would need to override that behavior with `--no-git`. This repository does not do that on pre-push, because the goal is to catch historical secrets too.
+- `npm audit --audit-level=high` is different. It checks the current dependency tree, which is typically driven by the current `package-lock.json` and installed dependency state, not old Git commits.
+- Because of that, if you change dependency versions in `package.json` but do not refresh and commit the matching lockfile state, `npm audit` can still report the older vulnerable tree during pre-push.
+
 ## Working On The Experience
 
 - Scroll to move through the story
