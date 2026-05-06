@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   frontend-ci:
-    name: Frontend CI + Security Reports
+    name: Frontend CI + Source Security Gate
     runs-on: ubuntu-latest
 
     steps:
@@ -33,9 +33,6 @@ jobs:
 
       - name: Run tests
         run: npm test
-
-      - name: Build frontend
-        run: npm run build
 
       - name: Run Gitleaks secret scan
         uses: gitleaks/gitleaks-action@v2
@@ -63,6 +60,45 @@ jobs:
             --output semgrep-report.json \
             . || true
 
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Combine security reports
+        run: |
+          jq -n \
+            --slurpfile trivy trivy-fs-report.json \
+            --slurpfile semgrep semgrep-report.json \
+            '{trivy: $trivy[0], semgrep: $semgrep[0]}' > combined-ci-security-report.json
+
+      - name: Run OPA CI security gate
+        run: |
+          echo "OPA deny messages:"
+          opa eval \
+            --format pretty \
+            --data policies/ci-security.rego \
+            --input combined-ci-security-report.json \
+            'data.devsecops.ci.deny'
+
+          DENY_COUNT=$(opa eval \
+            --format json \
+            --data policies/ci-security.rego \
+            --input combined-ci-security-report.json \
+            'count(data.devsecops.ci.deny)' | jq -r '.result[0].expressions[0].value')
+
+          echo "Deny count: $DENY_COUNT"
+
+          if [ "$DENY_COUNT" -gt 0 ]; then
+            echo "CI security gate failed."
+            exit 1
+          fi
+
+      - name: Build frontend
+        run: npm run build
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -77,3 +113,4 @@ jobs:
           path: |
             trivy-fs-report.json
             semgrep-report.json
+            combined-ci-security-report.json
