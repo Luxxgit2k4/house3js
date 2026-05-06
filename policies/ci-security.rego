@@ -2,7 +2,7 @@ package devsecops.ci
 
 default allow := true
 
-deny[msg] {
+deny contains msg if {
   some i
   result := input.trivy.Results[i]
   some j
@@ -11,7 +11,7 @@ deny[msg] {
   msg := sprintf("Trivy critical vulnerability found: %s in %s", [vuln.VulnerabilityID, result.Target])
 }
 
-deny[msg] {
+deny contains msg if {
   some i
   result := input.trivy.Results[i]
   some j
@@ -20,13 +20,13 @@ deny[msg] {
   msg := sprintf("Trivy high vulnerability found: %s in %s", [vuln.VulnerabilityID, result.Target])
 }
 
-deny[msg] {
+deny contains msg if {
   some i
   finding := input.semgrep.results[i]
   finding.extra.severity == "ERROR"
   msg := sprintf("Semgrep ERROR finding: %s in %s", [finding.check_id, finding.path])
 }
 
-allow := false {
+allow := false if {
   count(deny) > 0
 }
