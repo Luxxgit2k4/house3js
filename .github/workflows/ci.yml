@@ -62,7 +62,9 @@ jobs:
 
       - name: Install OPA
         run: |
-          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          OPA_VERSION="v1.10.1"
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+            -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
           chmod +x opa
           sudo mv opa /usr/local/bin/opa
           opa version
