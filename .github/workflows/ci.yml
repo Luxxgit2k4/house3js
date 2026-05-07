@@ -2,18 +2,25 @@ name: CI
 
 on:
   pull_request:
-    types: closed
+    types: [closed]
     branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
+  id-token: write
+
+env:
+  OPA_VERSION: v1.10.1
+  OPA_DIR: .tools/opa
+  IMAGE_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/house3js
 
 jobs:
   frontend-ci:
     name: Frontend CI + Source Security Gate
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
 
     steps:
       - name: Checkout repository
@@ -59,25 +66,37 @@ jobs:
             --json \
             --output semgrep-report.json || true
 
+      - name: Cache OPA
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OPA_DIR }}
+          key: opa-${{ runner.os }}-${{ env.OPA_VERSION }}
+
       - name: Install OPA
         run: |
-          OPA_VERSION="v1.10.1"
-          curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
-            -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
-          chmod +x opa
-          sudo mv opa /usr/local/bin/opa
-          opa version
+          mkdir -p "${OPA_DIR}"
 
-      - name: Combine security reports
+          if [ ! -x "${OPA_DIR}/opa" ]; then
+            curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+              -o "${OPA_DIR}/opa" \
+              "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+
+            chmod +x "${OPA_DIR}/opa"
+          fi
+
+          echo "$PWD/${OPA_DIR}" >> "$GITHUB_PATH"
+          "${OPA_DIR}/opa" version
+
+      - name: Combine source security reports
         run: |
           jq -n \
             --slurpfile trivy trivy-fs-report.json \
             --slurpfile semgrep semgrep-report.json \
             '{trivy: $trivy[0], semgrep: $semgrep[0]}' > combined-ci-security-report.json
 
-      - name: Run OPA CI security gate
+      - name: Run OPA source security gate
         run: |
-          echo "OPA deny messages:"
+          echo "OPA source deny messages:"
           opa eval \
             --format pretty \
             --data policies/ci-security.rego \
@@ -90,28 +109,172 @@ jobs:
             --input combined-ci-security-report.json \
             'count(data.devsecops.ci.deny)' | jq -r '.result[0].expressions[0].value')
 
-          echo "Deny count: $DENY_COUNT"
+          echo "Source deny count: $DENY_COUNT"
 
           if [ "$DENY_COUNT" -gt 0 ]; then
-            echo "CI security gate failed."
+            echo "Source security gate failed."
             exit 1
           fi
 
-      - name: Build frontend
-        run: npm run build
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist/
-
-      - name: Upload security reports
+      - name: Upload source security reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ci-security-reports
+          name: source-security-reports
           path: |
             trivy-fs-report.json
             semgrep-report.json
             combined-ci-security-report.json
+
+  docker-build-security:
+    name: Docker Build + Image Security Gate
+    runs-on: ubuntu-latest
+    needs: frontend-ci
+
+    outputs:
+      image_ref: ${{ steps.digest.outputs.image_ref }}
+      image_digest: ${{ steps.digest.outputs.image_digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE_TAG="${IMAGE_REPO}:${SHORT_SHA}"
+
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+          echo "Image tag: ${IMAGE_TAG}"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image locally
+        run: |
+          docker build \
+            -f dockerfile \
+            -t "${{ steps.meta.outputs.image_tag }}" \
+            .
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image_tag }}
+          format: json
+          output: trivy-image-report.json
+          exit-code: 0
+
+      - name: Cache OPA
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OPA_DIR }}
+          key: opa-${{ runner.os }}-${{ env.OPA_VERSION }}
+
+      - name: Install OPA
+        run: |
+          mkdir -p "${OPA_DIR}"
+
+          if [ ! -x "${OPA_DIR}/opa" ]; then
+            curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+              -o "${OPA_DIR}/opa" \
+              "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+
+            chmod +x "${OPA_DIR}/opa"
+          fi
+
+          echo "$PWD/${OPA_DIR}" >> "$GITHUB_PATH"
+          "${OPA_DIR}/opa" version
+
+      - name: Run OPA image security gate
+        run: |
+          echo "OPA image deny messages:"
+          opa eval \
+            --format pretty \
+            --data policies/image-security.rego \
+            --input trivy-image-report.json \
+            'data.devsecops.image.deny'
+
+          DENY_COUNT=$(opa eval \
+            --format json \
+            --data policies/image-security.rego \
+            --input trivy-image-report.json \
+            'count(data.devsecops.image.deny)' | jq -r '.result[0].expressions[0].value')
+
+          echo "Image deny count: $DENY_COUNT"
+
+          if [ "$DENY_COUNT" -gt 0 ]; then
+            echo "Image security gate failed."
+            exit 1
+          fi
+
+      - name: Push Docker image
+        run: |
+          docker push "${{ steps.meta.outputs.image_tag }}"
+
+      - name: Get pushed image digest
+        id: digest
+        run: |
+          DIGEST=$(docker buildx imagetools inspect "${{ steps.meta.outputs.image_tag }}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+
+          IMAGE_REF="docker.io/${IMAGE_REPO}@${DIGEST}"
+
+          echo "image_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
+          echo "Pushed image digest: ${DIGEST}"
+          echo "Immutable image ref: ${IMAGE_REF}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with Cosign keyless
+        run: |
+          cosign sign --yes "${{ steps.digest.outputs.image_ref }}"
+
+      - name: Verify image signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${{ steps.digest.outputs.image_ref }}"
+
+      - name: Upload image security report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-security-report
+          path: trivy-image-report.json
+
+  deploy-production:
+    name: Production Approval + Render Deploy
+    runs-on: ubuntu-latest
+    needs: docker-build-security
+
+    environment:
+      name: production
+
+    steps:
+      - name: Trigger Render deploy hook with image digest
+        run: |
+          HOOK="${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+          IMAGE_REF="${{ needs.docker-build-security.outputs.image_ref }}"
+
+          echo "Deploying image: ${IMAGE_REF}"
+
+          ENCODED_IMAGE=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${IMAGE_REF}', safe=''))")
+
+          if [[ "$HOOK" == *"?"* ]]; then
+            curl --fail -X POST "${HOOK}&imgURL=${ENCODED_IMAGE}"
+          else
+            curl --fail -X POST "${HOOK}?imgURL=${ENCODED_IMAGE}"
+          fi
+
+          echo "Triggered Render deploy for ${IMAGE_REF}"
